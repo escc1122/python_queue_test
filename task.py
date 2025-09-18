@@ -1,11 +1,8 @@
-from dataclasses import dataclass
+# 範例：繼承任務類別，可以加額外欄位
+from main import Task
 
-@dataclass
-class Task:
-    site: str
-    task_id: int
 
-# 可以自定義任務，繼承 Task
-@dataclass
-class MyTask(Task):
-    extra_data: str = ""
+class ExtendedTask(Task):
+    def __init__(self, group_id: str, request_id: str, extra: str):
+        super().__init__(group_id, request_id)
+        self.extra = extra
