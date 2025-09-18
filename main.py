@@ -1,27 +1,26 @@
+from threading import Semaphore, Event
+from collections import defaultdict
 import json
 import time
-from threading import Semaphore
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-import redis
 from typing import Callable
 
 class QueueWorkerFactory:
-    def __init__(self, redis_client: redis.Redis, max_threads: int = 5, site_limit: int = 3, backoff_delay: int = 3, batch_size: int = 5):
+    def __init__(self, redis_client, max_threads=5, site_limit=3, backoff_delay=3, batch_size=5, stop_event=None):
         self.r = redis_client
         self.max_threads = max_threads
         self.site_limit = site_limit
         self.backoff_delay = backoff_delay
         self.batch_size = batch_size
         self.site_semaphores = defaultdict(lambda: Semaphore(self.site_limit))
+        self.stop_event = stop_event or Event()  # 可外部控制停止
 
     def create_worker(self, main_queue: str, task_handler: Callable[[dict], None], backoff_zset: str):
         def worker():
-            while True:
-                item = self.r.blpop(main_queue, timeout=5)
+            while not self.stop_event.is_set():
+                item = self.r.blpop(main_queue, timeout=1)
                 if not item:
                     continue
-
                 _, task_bytes = item
                 task = json.loads(task_bytes)
                 site = task["site"]
@@ -41,18 +40,16 @@ class QueueWorkerFactory:
 
     def create_backoff_worker(self, main_queue: str, backoff_zset: str):
         def backoff_worker():
-            while True:
+            while not self.stop_event.is_set():
                 now = time.time()
                 tasks = self.r.zrangebyscore(backoff_zset, 0, now, start=0, num=self.batch_size)
                 if not tasks:
-                    time.sleep(1)
+                    time.sleep(0.1)
                     continue
-
                 for t in tasks:
                     self.r.rpush(main_queue, t)
                     self.r.zrem(backoff_zset, t)
-
-                time.sleep(0.1)
+                time.sleep(0.05)
         return backoff_worker
 
     def run(self, main_queue: str, task_handler: Callable[[dict], None], backoff_zset: str):
